@@ -199,6 +199,7 @@ class Registry:
         self.http = None
         self.last_error = None
         self.digest_method = "HEAD"
+        self.date_label = None
 
     def parse_login(self, login):
         if login is not None:
@@ -392,11 +393,29 @@ class Registry:
         if str(response.status_code)[0] == '2':
             self.last_error = None
             image_age = json.loads(response.text)
-            return image_age['created']
+            return self.get_label_date(image_age) or image_age['created']
         else:
             print(" blob not found: {0}".format(self.last_error))
             self.last_error = response.status_code
             return []
+
+    # 'created' keeps the time of a cached build, so a label set at build time is preferred
+    def get_label_date(self, image_config):
+        if self.date_label is None:
+            return None
+
+        labels = (image_config.get('config') or {}).get('Labels') or {}
+        label_date = labels.get(self.date_label)
+        if label_date is None:
+            return None
+
+        try:
+            if parse(label_date).tzinfo is None:
+                return None
+        except (ValueError, OverflowError):
+            return None
+
+        return label_date
 
 
 def parse_args(args=None):
@@ -558,6 +577,14 @@ for more detail on garbage collection read here:
         help=('Orders images by date instead of by tag name.'
               'Useful if your tag names are not in a fixed order.'),
         action='store_true'
+    )
+    parser.add_argument(
+        '--date-label',
+        help=('Take the image date from this label, such as org.label-schema.build-date, '
+              'instead of the image creation time. Images without the label, or with a '
+              'value that is not a date with a time zone, use the creation time.'),
+        default=None,
+        metavar='LABEL'
     )
     return parser.parse_args(args)
 
@@ -774,6 +801,7 @@ def main_loop(args):
                                args.digest_method)
 
     registry.auth_schemes = get_auth_schemes(registry,'/v2/_catalog')
+    registry.date_label = args.date_label
 
     if args.delete:
         print("Will delete all but {0} last tags".format(keep_last_versions))

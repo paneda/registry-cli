@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from datetime import datetime
@@ -452,6 +453,48 @@ class TestImageAge(unittest.TestCase):
         self.assertEqual(self.registry.last_error, 400)
 
 
+class TestImageAgeFromLabel(unittest.TestCase):
+
+    CREATED = "2017-12-27T12:47:33.511765448Z"
+    BUILD_DATE = "2017-12-29T08:00:00.000Z"
+    LABEL = "org.label-schema.build-date"
+
+    def setUp(self):
+        self.registry = Registry()
+        self.registry.http = MockRequests()
+        self.registry.hostname = "http://testdomain.com"
+        self.json_payload = {'mediaType': 'application/vnd.docker.container.image.v1+json', 'size': 12953,
+                             'digest': 'sha256:8d71dfbf239c0015ad66993d55d3954cee2d52d86f829fdff9ccfb9f23b75aa8'}
+
+    def image_age_with_labels(self, labels):
+        self.registry.http.reset_return_value(200, json.dumps(
+            {"config": {"Labels": labels}, "created": self.CREATED}))
+        return self.registry.get_image_age('image1', self.json_payload)
+
+    def test_label_is_used_when_set(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({self.LABEL: self.BUILD_DATE}), self.BUILD_DATE)
+
+    def test_label_is_ignored_without_date_label(self):
+        self.assertEqual(self.image_age_with_labels({self.LABEL: self.BUILD_DATE}), self.CREATED)
+
+    def test_created_when_label_missing(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({"other": self.BUILD_DATE}), self.CREATED)
+
+    def test_created_when_image_has_no_labels(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels(None), self.CREATED)
+
+    def test_created_when_label_is_not_a_date(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({self.LABEL: "placeholder-set-by-TC"}), self.CREATED)
+
+    def test_created_when_label_has_no_time_zone(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({self.LABEL: "2017-12-29T08:00:00"}), self.CREATED)
+
+
 class TestListLayers(unittest.TestCase):
 
     def setUp(self):
@@ -900,7 +943,8 @@ class TestArgParser(unittest.TestCase):
                      "--delete-by-hours", "24",
                      "--keep-by-hours", "24",
                      "--digest-method", "GET",
-                     "--order-by-date"]
+                     "--order-by-date",
+                     "--date-label", "org.label-schema.build-date"]
         args = parse_args(args_list)
         self.assertTrue(args.delete)
         self.assertTrue(args.layers)
@@ -917,6 +961,7 @@ class TestArgParser(unittest.TestCase):
         self.assertEqual(args.delete_by_hours, "24")
         self.assertEqual(args.keep_by_hours, "24")
         self.assertEqual(args.digest_method, "GET")
+        self.assertEqual(args.date_label, "org.label-schema.build-date")
 
     def test_default_args(self):
         args_list = ["-r", "hostname",
@@ -924,6 +969,7 @@ class TestArgParser(unittest.TestCase):
         args = parse_args(args_list)
         self.assertEqual(args.digest_method, "HEAD")
         self.assertFalse(args.order_by_date)
+        self.assertIsNone(args.date_label)
 
 
 if __name__ == '__main__':
