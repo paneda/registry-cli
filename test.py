@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from dateutil.tz import tzutc, tzoffset
 
@@ -486,6 +486,14 @@ class TestImageAgeFromLabel(unittest.TestCase):
         self.registry.date_label = self.LABEL
         self.assertEqual(self.image_age_with_labels(None), self.CREATED)
 
+    def test_created_when_label_is_older(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({self.LABEL: "2017-12-01T08:00:00.000Z"}), self.CREATED)
+
+    def test_created_when_label_is_empty(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({self.LABEL: ""}), self.CREATED)
+
     def test_created_when_label_is_not_a_date(self):
         self.registry.date_label = self.LABEL
         self.assertEqual(self.image_age_with_labels({self.LABEL: "placeholder-set-by-TC"}), self.CREATED)
@@ -909,7 +917,8 @@ class TestKeepTags(unittest.TestCase):
     # `assert_called_with()`.
     mock_registry = create_mock_registry.__func__('localhost:8989', None, True)
 
-    def return_mock_registry(self, host, login, no_validate_ssl, digest_method="HEAD"):
+    @staticmethod
+    def return_mock_registry(host, login, no_validate_ssl, digest_method="HEAD"):
         return TestKeepTags.mock_registry
 
     @patch('registry.Registry.create', return_mock_registry)
@@ -920,6 +929,45 @@ class TestKeepTags(unittest.TestCase):
         # through delete_tags_by_age) with `keep_tags` set to the tags we want to keep.
         main_loop(parse_args(('--delete', '--num', '5', '-r', 'localhost:8989', '--keep-tags', '1')))
         delete_tags_patched.assert_called_with(TestKeepTags.mock_registry, 'a', False, ['1', '2'], ['1', '3', '4', '5', '6', '7'])
+
+
+
+class TestDeleteByLabelDate(unittest.TestCase):
+    LABEL = "org.label-schema.build-date"
+
+    @staticmethod
+    def blob(created_hours_ago, label_hours_ago=None):
+        now = datetime.now(tzutc())
+        labels = {}
+        if label_hours_ago is not None:
+            labels[TestDeleteByLabelDate.LABEL] = (now - timedelta(hours=label_hours_ago)).isoformat()
+        return json.dumps({"config": {"Labels": labels},
+                           "created": (now - timedelta(hours=created_hours_ago)).isoformat()})
+
+    def setUp(self):
+        blobs = {
+            'cached': self.blob(11 * 24, 1),
+            'old': self.blob(10 * 24),
+            'old_label': self.blob(9 * 24, 8 * 24),
+            'fresh': self.blob(2),
+        }
+        self.registry = Registry._create('localhost:8989', None, True)
+        self.registry.list_images = MagicMock(return_value=['a'])
+        self.registry.list_tags = MagicMock(return_value=sorted(blobs))
+        self.registry.get_tag_config = lambda image, tag: {
+            'mediaType': 'application/vnd.docker.container.image.v1+json', 'digest': tag}
+        self.registry.http = MagicMock()
+        self.registry.http.request = lambda method, url, **kwargs: ReturnValue(200, blobs[url.split('/')[-1]])
+
+    @patch('registry.get_auth_schemes')
+    @patch('registry.delete_tags')
+    def test_job_flags_keep_cached_build(self, delete_tags_patched, get_auth_schemes_patched):
+        with patch('registry.Registry.create', MagicMock(return_value=self.registry)):
+            main_loop(parse_args(('--delete', '--num', '1', '--keep-by-hours', '120', '--order-by-date',
+                                  '--date-label', self.LABEL, '-r', 'localhost:8989')))
+        (_, _, _, tags_to_delete, tags_to_keep) = delete_tags_patched.call_args[0]
+        self.assertEqual(tags_to_delete, ['old', 'old_label', 'fresh'])
+        self.assertEqual(set(tags_to_keep), {'cached', 'fresh'})
 
 
 class TestArgParser(unittest.TestCase):
