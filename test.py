@@ -486,6 +486,10 @@ class TestImageAgeFromLabel(unittest.TestCase):
         self.registry.date_label = self.LABEL
         self.assertEqual(self.image_age_with_labels(None), self.CREATED)
 
+    def test_created_when_label_has_invalid_offset(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({self.LABEL: "2017-12-29T08:00:00+24:00"}), self.CREATED)
+
     def test_created_when_label_is_older(self):
         self.registry.date_label = self.LABEL
         self.assertEqual(self.image_age_with_labels({self.LABEL: "2017-12-01T08:00:00.000Z"}), self.CREATED)

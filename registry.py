@@ -414,7 +414,7 @@ class Registry:
             return None
 
         try:
-            if parse(label_date).tzinfo is None:
+            if parse(label_date).utcoffset() is None:
                 return None
         except (ValueError, OverflowError):
             return None
