@@ -275,9 +275,12 @@ class Registry:
             if result is None:
                 return images
             repos = json.loads(result.text)['repositories']
-            # the same last repository again means the registry ignores 'last'
-            if len(repos) == 0 or repos[-1] == last:
+            if len(repos) == 0:
                 break
+            # the same last repository again means the registry ignores 'last'
+            if repos[-1] == last:
+                self.last_error = "the registry repeats the catalog page after {0}".format(last)
+                return images
             images += repos
             if len(repos) < self.CATALOG_PAGE_SIZE:
                 break
@@ -798,7 +801,7 @@ def main_loop(args):
         image_list = registry.list_images()
         # an incomplete catalog would silently leave images unpruned
         if registry.last_error is not None:
-            print("Cannot list the images in the registry: error {0}".format(registry.last_error))
+            print("Cannot list the images in the registry: {0}".format(registry.last_error))
             sys.exit(1)
         if args.images_like:
             image_list = keep_images_like(image_list, args.images_like)

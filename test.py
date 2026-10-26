@@ -208,6 +208,7 @@ class TestListImages(unittest.TestCase):
     def test_list_images_registry_ignores_last(self):
         self.return_pages(["a", "b"], ["a", "b"])
         self.assertEqual(self.registry.list_images(), ["a", "b"])
+        self.assertEqual(self.registry.last_error, "the registry repeats the catalog page after b")
 
     @patch('registry.Registry.CATALOG_PAGE_SIZE', 2)
     def test_list_images_error_on_later_page(self):
