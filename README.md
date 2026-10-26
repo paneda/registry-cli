@@ -140,6 +140,11 @@ Note that deleting by age will not prevent more recent tags from being deleted i
 ```
   registry.py -r https://example.com:5000 --dry-run --delete --keep-by-hours 72 --keep-tags-like latest
 ```
+
+The age of an image is its creation time by default. An image whose last layers came from the build cache keeps the creation time of the cached build, so it can look days older than it is. If your images record their build time in a label, use `--date-label` to take the date from it when it is later than the creation time. Images without the label, or with a value that is not a date with a time zone, use the creation time:
+```
+  registry.py -r https://example.com:5000 --dry-run --delete --keep-by-hours 72 --order-by-date --date-label org.label-schema.build-date
+```
 ## Disable ssl verification
 
 If you are using docker registry with a self signed ssl certificate, you can disable ssl verification:

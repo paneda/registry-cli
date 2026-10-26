@@ -199,6 +199,7 @@ class Registry:
         self.http = None
         self.last_error = None
         self.digest_method = "HEAD"
+        self.date_label = None
 
     def parse_login(self, login):
         if login is not None:
@@ -392,11 +393,35 @@ class Registry:
         if str(response.status_code)[0] == '2':
             self.last_error = None
             image_age = json.loads(response.text)
-            return image_age['created']
+            created = image_age['created']
+            label_date = self.get_label_date(image_age)
+            if label_date and parse(label_date) > parse(created):
+                return label_date
+            return created
         else:
             print(" blob not found: {0}".format(self.last_error))
             self.last_error = response.status_code
             return []
+
+    # 'created' keeps the time of a cached build, so a later date in a label set at build time wins
+    def get_label_date(self, image_blob):
+        if self.date_label is None:
+            return None
+
+        labels = (image_blob.get('config') or {}).get('Labels') or {}
+        label_date = labels.get(self.date_label)
+        if not label_date:
+            return None
+
+        try:
+            # parse() fills missing parts from its default, so an incomplete date differs between defaults
+            label = parse(label_date, default=dt(2000, 1, 1))
+            if label.utcoffset() is None or label != parse(label_date, default=dt(2001, 2, 2)):
+                return None
+        except (ValueError, OverflowError):
+            return None
+
+        return label_date
 
 
 def parse_args(args=None):
@@ -558,6 +583,14 @@ for more detail on garbage collection read here:
         help=('Orders images by date instead of by tag name.'
               'Useful if your tag names are not in a fixed order.'),
         action='store_true'
+    )
+    parser.add_argument(
+        '--date-label',
+        help=('Take the image date from this label, such as org.label-schema.build-date, '
+              'when it is later than the image creation time. Images without the label, or '
+              'with a value that is not a date with a time zone, use the creation time.'),
+        default=None,
+        metavar='LABEL'
     )
     return parser.parse_args(args)
 
@@ -774,6 +807,7 @@ def main_loop(args):
                                args.digest_method)
 
     registry.auth_schemes = get_auth_schemes(registry,'/v2/_catalog')
+    registry.date_label = args.date_label
 
     if args.delete:
         print("Will delete all but {0} last tags".format(keep_last_versions))

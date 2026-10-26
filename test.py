@@ -1,6 +1,7 @@
+import json
 import unittest
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from dateutil.tz import tzutc, tzoffset
 
@@ -452,6 +453,68 @@ class TestImageAge(unittest.TestCase):
         self.assertEqual(self.registry.last_error, 400)
 
 
+class TestImageAgeFromLabel(unittest.TestCase):
+
+    CREATED = "2017-12-27T12:47:33.511765448Z"
+    BUILD_DATE = "2017-12-29T08:00:00.000Z"
+    LABEL = "org.label-schema.build-date"
+
+    def setUp(self):
+        self.registry = Registry()
+        self.registry.http = MockRequests()
+        self.registry.hostname = "http://testdomain.com"
+        self.json_payload = {'mediaType': 'application/vnd.docker.container.image.v1+json', 'size': 12953,
+                             'digest': 'sha256:8d71dfbf239c0015ad66993d55d3954cee2d52d86f829fdff9ccfb9f23b75aa8'}
+
+    def image_age_with_labels(self, labels):
+        self.registry.http.reset_return_value(200, json.dumps(
+            {"config": {"Labels": labels}, "created": self.CREATED}))
+        return self.registry.get_image_age('image1', self.json_payload)
+
+    def test_label_is_used_when_set(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({self.LABEL: self.BUILD_DATE}), self.BUILD_DATE)
+
+    def test_label_is_ignored_without_date_label(self):
+        self.assertEqual(self.image_age_with_labels({self.LABEL: self.BUILD_DATE}), self.CREATED)
+
+    def test_created_when_label_missing(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({"other": self.BUILD_DATE}), self.CREATED)
+
+    def test_created_when_image_has_no_labels(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels(None), self.CREATED)
+
+    def test_created_when_label_has_invalid_offset(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({self.LABEL: "2017-12-29T08:00:00+24:00"}), self.CREATED)
+
+    def test_created_when_label_has_no_date(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({self.LABEL: "08:00Z"}), self.CREATED)
+
+    def test_created_when_label_has_no_day(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({self.LABEL: "2017-12T08:00:00Z"}), self.CREATED)
+
+    def test_created_when_label_is_older(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({self.LABEL: "2017-12-01T08:00:00.000Z"}), self.CREATED)
+
+    def test_created_when_label_is_empty(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({self.LABEL: ""}), self.CREATED)
+
+    def test_created_when_label_is_not_a_date(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({self.LABEL: "placeholder-set-by-TC"}), self.CREATED)
+
+    def test_created_when_label_has_no_time_zone(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({self.LABEL: "2017-12-29T08:00:00"}), self.CREATED)
+
+
 class TestListLayers(unittest.TestCase):
 
     def setUp(self):
@@ -866,7 +929,8 @@ class TestKeepTags(unittest.TestCase):
     # `assert_called_with()`.
     mock_registry = create_mock_registry.__func__('localhost:8989', None, True)
 
-    def return_mock_registry(self, host, login, no_validate_ssl, digest_method="HEAD"):
+    @staticmethod
+    def return_mock_registry(host, login, no_validate_ssl, digest_method="HEAD"):
         return TestKeepTags.mock_registry
 
     @patch('registry.Registry.create', return_mock_registry)
@@ -877,6 +941,45 @@ class TestKeepTags(unittest.TestCase):
         # through delete_tags_by_age) with `keep_tags` set to the tags we want to keep.
         main_loop(parse_args(('--delete', '--num', '5', '-r', 'localhost:8989', '--keep-tags', '1')))
         delete_tags_patched.assert_called_with(TestKeepTags.mock_registry, 'a', False, ['1', '2'], ['1', '3', '4', '5', '6', '7'])
+
+
+
+class TestDeleteByLabelDate(unittest.TestCase):
+    LABEL = "org.label-schema.build-date"
+
+    @staticmethod
+    def blob(created_hours_ago, label_hours_ago=None):
+        now = datetime.now(tzutc())
+        labels = {}
+        if label_hours_ago is not None:
+            labels[TestDeleteByLabelDate.LABEL] = (now - timedelta(hours=label_hours_ago)).isoformat()
+        return json.dumps({"config": {"Labels": labels},
+                           "created": (now - timedelta(hours=created_hours_ago)).isoformat()})
+
+    def setUp(self):
+        blobs = {
+            'cached': self.blob(11 * 24, 1),
+            'old': self.blob(10 * 24),
+            'old_label': self.blob(9 * 24, 8 * 24),
+            'fresh': self.blob(2),
+        }
+        self.registry = Registry._create('localhost:8989', None, True)
+        self.registry.list_images = MagicMock(return_value=['a'])
+        self.registry.list_tags = MagicMock(return_value=sorted(blobs))
+        self.registry.get_tag_config = lambda image, tag: {
+            'mediaType': 'application/vnd.docker.container.image.v1+json', 'digest': tag}
+        self.registry.http = MagicMock()
+        self.registry.http.request = lambda method, url, **kwargs: ReturnValue(200, blobs[url.split('/')[-1]])
+
+    @patch('registry.get_auth_schemes')
+    @patch('registry.delete_tags')
+    def test_job_flags_keep_cached_build(self, delete_tags_patched, get_auth_schemes_patched):
+        with patch('registry.Registry.create', MagicMock(return_value=self.registry)):
+            main_loop(parse_args(('--delete', '--num', '1', '--keep-by-hours', '120', '--order-by-date',
+                                  '--date-label', self.LABEL, '-r', 'localhost:8989')))
+        (_, _, _, tags_to_delete, tags_to_keep) = delete_tags_patched.call_args[0]
+        self.assertEqual(tags_to_delete, ['old', 'old_label', 'fresh'])
+        self.assertEqual(set(tags_to_keep), {'cached', 'fresh'})
 
 
 class TestArgParser(unittest.TestCase):
@@ -900,7 +1003,8 @@ class TestArgParser(unittest.TestCase):
                      "--delete-by-hours", "24",
                      "--keep-by-hours", "24",
                      "--digest-method", "GET",
-                     "--order-by-date"]
+                     "--order-by-date",
+                     "--date-label", "org.label-schema.build-date"]
         args = parse_args(args_list)
         self.assertTrue(args.delete)
         self.assertTrue(args.layers)
@@ -917,6 +1021,7 @@ class TestArgParser(unittest.TestCase):
         self.assertEqual(args.delete_by_hours, "24")
         self.assertEqual(args.keep_by_hours, "24")
         self.assertEqual(args.digest_method, "GET")
+        self.assertEqual(args.date_label, "org.label-schema.build-date")
 
     def test_default_args(self):
         args_list = ["-r", "hostname",
@@ -924,6 +1029,7 @@ class TestArgParser(unittest.TestCase):
         args = parse_args(args_list)
         self.assertEqual(args.digest_method, "HEAD")
         self.assertFalse(args.order_by_date)
+        self.assertIsNone(args.date_label)
 
 
 if __name__ == '__main__':
