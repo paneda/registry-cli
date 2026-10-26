@@ -265,12 +265,29 @@ class Registry:
         self.last_error = result.status_code
         return None
 
-    def list_images(self):
-        result = self.send('/v2/_catalog?n=10000')
-        if result is None:
-            return []
+    # registry 2.8.2 and later reject a page size above 1000
+    CATALOG_PAGE_SIZE = 100
 
-        return json.loads(result.text)['repositories']
+    def list_images(self):
+        images = []
+        last = ""
+        while True:
+            result = self.send('/v2/_catalog?n={0}&last={1}'.format(self.CATALOG_PAGE_SIZE, last))
+            if result is None:
+                return images
+            repos = json.loads(result.text)['repositories']
+            if len(repos) == 0:
+                break
+            # the same last repository again means the registry ignores 'last'
+            if repos[-1] == last:
+                self.last_error = "the registry repeats the catalog page after {0}".format(last)
+                return images
+            images += repos
+            if len(repos) < self.CATALOG_PAGE_SIZE:
+                break
+            last = repos[-1]
+
+        return images
 
     def list_tags(self, image_name):
         result = self.send("/v2/{0}/tags/list".format(image_name))
@@ -816,6 +833,10 @@ def main_loop(args):
         image_list = args.image
     else:
         image_list = registry.list_images()
+        # an incomplete catalog would silently leave images unpruned
+        if registry.last_error is not None:
+            print("Cannot list the images in the registry: {0}".format(registry.last_error))
+            sys.exit(1)
         if args.images_like:
             image_list = keep_images_like(image_list, args.images_like)
 
