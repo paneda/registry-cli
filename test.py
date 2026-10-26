@@ -193,11 +193,11 @@ class TestListImages(unittest.TestCase):
 
     @patch('registry.Registry.CATALOG_PAGE_SIZE', 2)
     def test_list_images_pages(self):
-        self.return_pages(["a", "b"], ["c", "d"], ["e"])
-        self.assertEqual(self.registry.list_images(), ["a", "b", "c", "d", "e"])
+        self.return_pages(["a/x", "a/y"], ["b/x", "b/y"], ["c/x"])
+        self.assertEqual(self.registry.list_images(), ["a/x", "a/y", "b/x", "b/y", "c/x"])
         self.assertEqual(self.requested_paths(), ['/v2/_catalog?n=2&last=',
-                                                  '/v2/_catalog?n=2&last=b',
-                                                  '/v2/_catalog?n=2&last=d'])
+                                                  '/v2/_catalog?n=2&last=a/y',
+                                                  '/v2/_catalog?n=2&last=b/y'])
 
     @patch('registry.Registry.CATALOG_PAGE_SIZE', 2)
     def test_list_images_full_last_page(self):
@@ -214,6 +214,17 @@ class TestListImages(unittest.TestCase):
         self.return_pages(["a", "b"], ReturnValue(500))
         self.assertEqual(self.registry.list_images(), ["a", "b"])
         self.assertEqual(self.registry.last_error, 500)
+
+    @patch('registry.Registry.CATALOG_PAGE_SIZE', 2)
+    @patch('registry.get_auth_schemes')  # called in main_loop, turn to noop
+    def test_main_loop_exits_on_incomplete_catalog(self, get_auth_schemes_patched):
+        self.return_pages(["a", "b"], ReturnValue(500))
+        self.registry.list_tags = MagicMock()
+        with patch('registry.Registry.create', MagicMock(return_value=self.registry)):
+            with self.assertRaises(SystemExit) as raised:
+                main_loop(parse_args(('-r', 'localhost:8989', '--images-like', 'a', '--delete')))
+        self.assertEqual(raised.exception.code, 1)
+        self.registry.list_tags.assert_not_called()
 
     def test_list_images_invalid_http_response(self):
         self.registry.http.reset_return_value(404)

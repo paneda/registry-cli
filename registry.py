@@ -796,6 +796,10 @@ def main_loop(args):
         image_list = args.image
     else:
         image_list = registry.list_images()
+        # an incomplete catalog would silently leave images unpruned
+        if registry.last_error is not None:
+            print("Cannot list the images in the registry: error {0}".format(registry.last_error))
+            sys.exit(1)
         if args.images_like:
             image_list = keep_images_like(image_list, args.images_like)
 
