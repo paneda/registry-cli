@@ -490,6 +490,14 @@ class TestImageAgeFromLabel(unittest.TestCase):
         self.registry.date_label = self.LABEL
         self.assertEqual(self.image_age_with_labels({self.LABEL: "2017-12-29T08:00:00+24:00"}), self.CREATED)
 
+    def test_created_when_label_has_no_date(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({self.LABEL: "08:00Z"}), self.CREATED)
+
+    def test_created_when_label_has_no_day(self):
+        self.registry.date_label = self.LABEL
+        self.assertEqual(self.image_age_with_labels({self.LABEL: "2017-12T08:00:00Z"}), self.CREATED)
+
     def test_created_when_label_is_older(self):
         self.registry.date_label = self.LABEL
         self.assertEqual(self.image_age_with_labels({self.LABEL: "2017-12-01T08:00:00.000Z"}), self.CREATED)

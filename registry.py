@@ -414,7 +414,9 @@ class Registry:
             return None
 
         try:
-            if parse(label_date).utcoffset() is None:
+            # parse() fills missing parts from its default, so an incomplete date differs between defaults
+            label = parse(label_date, default=dt(2000, 1, 1))
+            if label.utcoffset() is None or label != parse(label_date, default=dt(2001, 2, 2)):
                 return None
         except (ValueError, OverflowError):
             return None
