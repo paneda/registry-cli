@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from datetime import datetime
@@ -179,6 +180,40 @@ class TestListImages(unittest.TestCase):
         response = self.registry.list_images()
         self.assertEqual(response, ["image1", "image2"])
         self.assertEqual(self.registry.last_error, None)
+        self.assertEqual(self.requested_paths(), ['/v2/_catalog?n=100&last='])
+
+    def requested_paths(self):
+        return [call[0][1][len(self.registry.hostname):]
+                for call in self.registry.http.request.call_args_list]
+
+    def return_pages(self, *pages):
+        self.registry.http.request.side_effect = [
+            page if isinstance(page, ReturnValue) else ReturnValue(200, json.dumps({"repositories": page}))
+            for page in pages]
+
+    @patch('registry.Registry.CATALOG_PAGE_SIZE', 2)
+    def test_list_images_pages(self):
+        self.return_pages(["a", "b"], ["c", "d"], ["e"])
+        self.assertEqual(self.registry.list_images(), ["a", "b", "c", "d", "e"])
+        self.assertEqual(self.requested_paths(), ['/v2/_catalog?n=2&last=',
+                                                  '/v2/_catalog?n=2&last=b',
+                                                  '/v2/_catalog?n=2&last=d'])
+
+    @patch('registry.Registry.CATALOG_PAGE_SIZE', 2)
+    def test_list_images_full_last_page(self):
+        self.return_pages(["a", "b"], [])
+        self.assertEqual(self.registry.list_images(), ["a", "b"])
+
+    @patch('registry.Registry.CATALOG_PAGE_SIZE', 2)
+    def test_list_images_registry_ignores_last(self):
+        self.return_pages(["a", "b"], ["a", "b"])
+        self.assertEqual(self.registry.list_images(), ["a", "b"])
+
+    @patch('registry.Registry.CATALOG_PAGE_SIZE', 2)
+    def test_list_images_error_on_later_page(self):
+        self.return_pages(["a", "b"], ReturnValue(500))
+        self.assertEqual(self.registry.list_images(), ["a", "b"])
+        self.assertEqual(self.registry.last_error, 500)
 
     def test_list_images_invalid_http_response(self):
         self.registry.http.reset_return_value(404)

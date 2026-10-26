@@ -264,18 +264,23 @@ class Registry:
         self.last_error = result.status_code
         return None
 
+    # registry 2.8.2 and later reject a page size above 1000
+    CATALOG_PAGE_SIZE = 100
+
     def list_images(self):
         images = []
         last = ""
-        # loop through all pages and get 10 records every time
         while True:
-            result = self.send('/v2/_catalog?n=10&last=' + last)
+            result = self.send('/v2/_catalog?n={0}&last={1}'.format(self.CATALOG_PAGE_SIZE, last))
             if result is None:
                 return images
             repos = json.loads(result.text)['repositories']
-            if len(repos) == 0:
+            # the same last repository again means the registry ignores 'last'
+            if len(repos) == 0 or repos[-1] == last:
                 break
             images += repos
+            if len(repos) < self.CATALOG_PAGE_SIZE:
+                break
             last = repos[-1]
 
         return images
